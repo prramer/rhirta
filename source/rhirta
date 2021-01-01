@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+
+# rhirta - An incremental back up program using rsync.
+#
+# Copyright 2020 Paul R. Ramer (prramer)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# You may use this program under the terms of the GNU GPL v3.
+# https://www.gnu.org/licenses/gpl-3.0.en.html 
+
+
+
+##############################################################
+### Declare our variables, constants, and data structures. ###
+##############################################################
+
+# Cardinal number constants
+readonly cardinal_zero=0
+
+# Errors codes
+readonly error_success=0       # Normal exit.  Not actually an error.
+readonly error_wrong_args=1    # Wrong number or typep of command line arguments.
+readonly error_not_dir=2       # Location is not a directory.
+readonly error_not_readable=3  # Location is not readable.
+readonly error_not_writable=4  # Location is not writable.
+readonly error_dependency=5    # Programs to run are not executable or missing.
+readonly error_mkdir_failed=6  # Could not make a new directory.
+
+# Other constants
+readonly rhirta="rhirta"                          # Name of the program.
+readonly source_dir="$1"                          # Source to back up.
+readonly dest_dir="$2"                            # Where the backup will go.
+readonly date_time="$(date +%Y-%m-%d_%H%M%S_%z)"  # Date and time format.
+readonly dest_path="${dest_dir}/${date_time}"     # Directory storing the backup.
+readonly latest_link="latest"                     # Link to latest incremental backup.
+readonly cli_args_correct_num=2                   # Required number of command line arguments.
+
+
+# Variables
+rsync_version=''  # Installed version of rsync.  Left blank until later.
+
+# Data arrays
+declare -a dependencies
+dependencies=(rsync sed egrep head mkdir rm ln)  # Programs external to Bash that we depend on.
+
+
+
+##############################
+### Declare our functions. ###
+##############################
+
+# Prints usage information.
+usage() {
+    echo "usage: $rhirta source_dir destination_dir" 1>&2
+}
+
+
+
+#################################
+### Run pre-operation checks. ###
+#################################
+
+# Check that the necessary programs to run this are installed.
+for program in "${dependencies[@]}"; do
+    if [ ! -x "$(which $program)" ]; then
+        echo "$rhirta: $program is missing or not executable.  Aborting."
+        exit $error_dependency
+    fi
+done
+
+# Check that rsync is version 3.1.0 or later.  Incremental backups will cause
+# unnecessary duplication with older versions.
+
+# $rsync_version is set to "1" if the version is lower than 3.1.0.
+rsync_version=$(rsync --version |head -n1 |egrep -c '[0-2]\.[0-9]\.[0-9]|3\.0\.[0-9]')
+if [ "$rsync_version" -ne "$cardinal_zero" ]; then
+    echo "$rhirta: rsync v3.1.0 or greater is required to run."
+    exit $error_dependency
+fi
+
+# Check for the correct number of command line arguments.
+if [ $# -ne $cli_args_correct_num ]; then
+    if [ $# -lt $cli_args_correct_num ]; then
+        echo "$rhirta: Missing arguments."
+        usage
+        exit $error_wrong_args
+    else
+        echo "$rhirta: Too many arguments."
+        usage
+        exit $error_wrong_args
+    fi
+fi
+
+# Check that the source is a readable directory.
+if [ ! -d $source_dir ]; then
+    echo "$rhirta: $source_dir is not a directory."
+    usage
+    exit $error_not_dir
+elif [ ! -r $source_dir ]; then
+    echo "$rhirta: $source_dir is not readable."
+    exit $error_not_readable
+fi
+
+# Check that the destination is a writable directory.  If it doesn't exist, make it.
+if [ ! -d $dest_dir ]; then
+    if [ ! -e $dest_dir ]; then
+        mkdir -p $dest_dir 2>/dev/null
+        if [ ! $? ]; then
+            echo -n "$rhirta: Could not make $dest_dir.  Check that the destination is writable."
+            exit $error_mkdir_failed
+        fi
+    else
+        echo "$rhirta: $dest_dir is not a directory."
+        usage
+        exit $error_not_dir
+    fi
+elif [ ! -w $dest_dir ]; then
+    echo "$rhirta: $dest_dir is not writable."
+    exit $error_not_writable
+fi
+
+
+##################################################
+### Ready to go.  Begin the regular operation. ###
+##################################################
+
+# Make the backup.  Only copy the changes since the last backup.
+if [ -e "${dest_dir}/${latest_link}" ]; then
+    rsync -av --delete --link-dest="../${latest_link}" "${source_dir}" "${dest_path}"
+else
+    rsync -av --delete "${source_dir}" "${dest_path}"
+fi
+
+# Delete the link to the previous backup and make a new link to the latest one.
+cd $dest_dir
+rm -f "${latest_link}"
+ln -s "${date_time}" "${latest_link}"
+
+# And we are done.
+exit $error_success
