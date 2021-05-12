@@ -1,2 +1,3 @@
-# rhirta
-A versioned backup script using rsync
+# About rhirta
+
+A versioned backup script using rsync.
